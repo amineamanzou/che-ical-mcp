@@ -58,6 +58,11 @@ The MCP server SHALL allow operators to configure an allowlist of calendar and r
 - **THEN** the server SHALL reject the call before invoking the handler
 - **AND** the error message SHALL NOT include the supplied calendar or reminder list name
 
+#### Scenario: Missing allowlist scope
+
+- **WHEN** the allowlist is configured and a calendar/list-aware tool call omits a scoped calendar or reminder list argument
+- **THEN** the server SHALL reject the call before invoking the handler
+
 ### Requirement: Runtime policy can cap read blast radius
 
 The MCP server SHALL allow operators to configure maximum result-count and date-range caps for scoped read tools.
@@ -67,6 +72,11 @@ The MCP server SHALL allow operators to configure maximum result-count and date-
 - **WHEN** a read tool call supplies a `limit` or date range above the configured policy cap
 - **THEN** the server SHALL reject the call before invoking the handler
 - **AND** the audit entry SHALL NOT include tool arguments or EventKit-derived content
+
+#### Scenario: Implicit read range
+
+- **WHEN** a read tool would use an implicit date range while a date-range cap is configured
+- **THEN** the server SHALL reject the call unless the implicit range is known and within the configured cap
 
 ### Requirement: Runtime policy can require server-side confirmation for mutations
 

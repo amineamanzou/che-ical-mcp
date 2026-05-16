@@ -138,6 +138,39 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testAllowlistDeniesUnscopedCleanupAcrossAllReminderLists() {
+        let policy = ToolPolicy(profile: .destructive, allowedCalendars: ["Work"])
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "cleanup_completed_reminders",
+            arguments: ["dry_run": .bool(false)]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "cleanup_completed_reminders")
+            XCTAssertEqual(profile, "destructive")
+        }
+    }
+
+    func testAllowlistDeniesUnscopedListEventsAcrossAllCalendars() {
+        let policy = ToolPolicy(profile: .read, allowedCalendars: ["Work"])
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_events")
+            XCTAssertEqual(profile, "read")
+        }
+    }
+
     func testConfirmationTokenRequiredWhenConfiguredForWriteTool() {
         let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
 
@@ -230,6 +263,49 @@ final class PolicyProfileTests: XCTestCase {
                 "end_date": .string("2026-02-01"),
             ]
         ))
+    }
+
+    func testMaxDateRangeDeniesSearchEventsImplicitDefaultRange() {
+        let policy = ToolPolicy(profile: .read, maxDateRangeDays: 30)
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "search_events",
+            arguments: [
+                "keyword": .string("planning"),
+                "limit": .int(10),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "search_events")
+            XCTAssertEqual(profile, "read")
+        }
+    }
+
+    func testMaxDateRangeDeniesListEventsQuickRangeAboveConfiguredCap() {
+        let policy = ToolPolicy(profile: .read, maxDateRangeDays: 7)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "list_events_quick",
+            arguments: [
+                "range": .string("next_7_days"),
+                "limit": .int(10),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events_quick",
+            arguments: [
+                "range": .string("next_30_days"),
+                "limit": .int(10),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_events_quick")
+            XCTAssertEqual(profile, "read")
+        }
     }
 
     func testPolicyFromEnvironmentParsesRuntimeConstraints() {

@@ -182,7 +182,12 @@ struct ToolPolicy: Sendable {
     private func enforceCalendarAllowlist(toolName: String, arguments: [String: Value]) throws {
         guard let allowedCalendars else { return }
 
-        for calendarName in try calendarNamesToCheck(toolName: toolName, arguments: arguments) {
+        let calendarNames = try calendarNamesToCheck(toolName: toolName, arguments: arguments)
+        guard !calendarNames.isEmpty else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+
+        for calendarName in calendarNames {
             guard allowedCalendars.contains(calendarName) else {
                 throw ToolError.policyDenied(name: toolName, profile: profileName)
             }
@@ -290,6 +295,7 @@ struct ToolPolicy: Sendable {
     private func enforceMaxDateRange(toolName: String, arguments: [String: Value]) throws {
         guard let maxDateRangeDays else { return }
 
+        try enforceImplicitDateRange(toolName: toolName, arguments: arguments, maxDateRangeDays: maxDateRangeDays)
         try enforceDateRangePair(
             toolName: toolName,
             arguments: arguments,
@@ -312,6 +318,35 @@ struct ToolPolicy: Sendable {
             maxDateRangeDays: maxDateRangeDays
         )
     }
+
+    private func enforceImplicitDateRange(
+        toolName: String,
+        arguments: [String: Value],
+        maxDateRangeDays: Int
+    ) throws {
+        if toolName == "search_events",
+           arguments["start_date"] == nil || arguments["end_date"] == nil {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+
+        guard toolName == "list_events_quick" else { return }
+        guard let range = arguments["range"]?.stringValue,
+              let days = Self.quickRangeDays[range],
+              days <= maxDateRangeDays
+        else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+    }
+
+    private static let quickRangeDays: [String: Int] = [
+        "today": 1,
+        "tomorrow": 1,
+        "this_week": 7,
+        "next_week": 7,
+        "next_7_days": 7,
+        "next_30_days": 30,
+        "this_month": 31,
+    ]
 
     private func enforceDateRangePair(
         toolName: String,
