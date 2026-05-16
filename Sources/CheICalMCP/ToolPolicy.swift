@@ -197,6 +197,18 @@ struct ToolPolicy: Sendable {
     private func calendarNamesToCheck(toolName: String, arguments: [String: Value]) throws -> [String] {
         var names: [String] = []
 
+        guard !Self.idOnlyMutationTools.contains(toolName) else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+
+        if toolName == "cleanup_completed_reminders", arguments["reminder_ids"] != nil {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+
+        if toolName == "delete_events_batch", arguments["event_ids"] != nil {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+
         try appendStringArgument("calendar_name", from: arguments, toolName: toolName, to: &names)
         try appendStringArgument("target_calendar", from: arguments, toolName: toolName, to: &names)
         try appendStringArrayArgument("calendar_names", from: arguments, toolName: toolName, to: &names)
@@ -210,6 +222,13 @@ struct ToolPolicy: Sendable {
 
         return names
     }
+
+    private static let idOnlyMutationTools: Set<String> = [
+        "delete_calendar",
+        "delete_event",
+        "delete_reminder",
+        "delete_reminders_batch",
+    ]
 
     private func appendStringArgument(
         _ key: String,
@@ -264,6 +283,12 @@ struct ToolPolicy: Sendable {
         guard let maxResultCount,
               Self.limitAwareTools.contains(toolName)
         else {
+            return
+        }
+        if toolName == "cleanup_completed_reminders", let reminderIDs = arguments["reminder_ids"] {
+            guard let ids = reminderIDs.arrayValue, ids.count <= maxResultCount else {
+                throw ToolError.policyDenied(name: toolName, profile: profileName)
+            }
             return
         }
         guard let rawLimit = arguments["limit"] else {

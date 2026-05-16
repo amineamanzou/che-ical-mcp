@@ -171,6 +171,37 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testAllowlistDeniesSpoofedScopeForIdOnlyDestructiveTools() {
+        let policy = ToolPolicy(profile: .destructive, allowedCalendars: ["Work"])
+
+        let cases: [(tool: String, arguments: [String: Value])] = [
+            ("delete_calendar", ["id": .string("calendar-id"), "calendar_name": .string("Work")]),
+            ("delete_event", ["event_id": .string("event-id"), "calendar_name": .string("Work")]),
+            ("delete_reminder", ["reminder_id": .string("reminder-id"), "calendar_name": .string("Work")]),
+            ("delete_reminders_batch", [
+                "reminder_ids": .array([.string("reminder-id")]),
+                "calendar_name": .string("Work"),
+            ]),
+            ("cleanup_completed_reminders", [
+                "reminder_ids": .array([.string("reminder-id")]),
+                "calendar_name": .string("Work"),
+            ]),
+        ]
+
+        for testCase in cases {
+            XCTAssertThrowsError(try policy.authorize(
+                toolName: testCase.tool,
+                arguments: testCase.arguments
+            )) { error in
+                guard case ToolError.policyDenied(let name, let profile) = error else {
+                    return XCTFail("Expected policyDenied for \(testCase.tool), got \(error)")
+                }
+                XCTAssertEqual(name, testCase.tool)
+                XCTAssertEqual(profile, "destructive")
+            }
+        }
+    }
+
     func testConfirmationTokenRequiredWhenConfiguredForWriteTool() {
         let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
 
@@ -243,6 +274,31 @@ final class PolicyProfileTests: XCTestCase {
             }
             XCTAssertEqual(name, "list_events")
             XCTAssertEqual(profile, "read")
+        }
+    }
+
+    func testMaxResultCountCapsCleanupReminderIdsInBindingMode() {
+        let policy = ToolPolicy(profile: .destructive, maxResultCount: 2)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "cleanup_completed_reminders",
+            arguments: [
+                "reminder_ids": .array([.string("a"), .string("b")]),
+                "limit": .int(1),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "cleanup_completed_reminders",
+            arguments: [
+                "reminder_ids": .array([.string("a"), .string("b"), .string("c")]),
+                "limit": .int(1),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "cleanup_completed_reminders")
+            XCTAssertEqual(profile, "destructive")
         }
     }
 

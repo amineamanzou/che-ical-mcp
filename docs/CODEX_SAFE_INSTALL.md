@@ -53,8 +53,8 @@ CHE_ICAL_MCP_AUDIT_LOG="$HOME/Library/Application Support/CheICalMCP/audit.log"
 
 Notes:
 
-- `CHE_ICAL_MCP_ALLOWED_CALENDARS` applies to `calendar_name`, `target_calendar`, `calendar_names`, and batch item `calendar_name` arguments before the handler runs. When configured, calendar/list-aware calls must include an explicit scoped calendar or list argument; unscoped calls are denied.
-- `CHE_ICAL_MCP_MAX_RESULT_COUNT` requires supported read calls to pass an explicit `limit` at or below the cap.
+- `CHE_ICAL_MCP_ALLOWED_CALENDARS` applies to `calendar_name`, `target_calendar`, `calendar_names`, and batch item `calendar_name` arguments before the handler runs. When configured, calendar/list-aware calls must include an explicit scoped calendar or list argument; unscoped calls are denied. ID-only destructive calls are denied under this allowlist because their handlers resolve the object by ID and do not use caller-supplied calendar fields as scope.
+- `CHE_ICAL_MCP_MAX_RESULT_COUNT` requires supported read calls to pass an explicit `limit` at or below the cap. For `cleanup_completed_reminders` binding mode, the cap applies to the number of supplied `reminder_ids` because `limit` is ignored in that mode.
 - `CHE_ICAL_MCP_MAX_DATE_RANGE_DAYS` denies explicit date/time ranges above the cap. `search_events` must include explicit `start_date` and `end_date`; `list_events_quick` ranges are allowed only when their known duration is within the cap.
 - `CHE_ICAL_MCP_CONFIRMATION_TOKEN` requires write-safe and destructive tool calls to include a matching `confirmation_token` argument. Use a per-session token and keep Codex tool approval enabled.
 - Invalid numeric runtime caps fail closed: the server denies tool calls instead of silently ignoring the bad setting.

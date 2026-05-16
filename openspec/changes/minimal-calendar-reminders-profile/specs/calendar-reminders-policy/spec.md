@@ -63,6 +63,16 @@ The MCP server SHALL allow operators to configure an allowlist of calendar and r
 - **WHEN** the allowlist is configured and a calendar/list-aware tool call omits a scoped calendar or reminder list argument
 - **THEN** the server SHALL reject the call before invoking the handler
 
+#### Scenario: ID-only mutation with spoofed allowlist scope
+
+- **WHEN** the allowlist is configured and an ID-only destructive tool call includes an otherwise allowed calendar or reminder list field that the handler does not use as scope
+- **THEN** the server SHALL reject the call before invoking the handler
+
+#### Scenario: Binding cleanup with spoofed allowlist scope
+
+- **WHEN** the allowlist is configured and `cleanup_completed_reminders` is called with `reminder_ids`
+- **THEN** the server SHALL reject the call before invoking the handler
+
 ### Requirement: Runtime policy can cap read blast radius
 
 The MCP server SHALL allow operators to configure maximum result-count and date-range caps for scoped read tools.
@@ -72,6 +82,11 @@ The MCP server SHALL allow operators to configure maximum result-count and date-
 - **WHEN** a read tool call supplies a `limit` or date range above the configured policy cap
 - **THEN** the server SHALL reject the call before invoking the handler
 - **AND** the audit entry SHALL NOT include tool arguments or EventKit-derived content
+
+#### Scenario: Oversized cleanup binding request
+
+- **WHEN** `cleanup_completed_reminders` supplies `reminder_ids` above the configured result-count cap
+- **THEN** the server SHALL reject the call before invoking the handler
 
 #### Scenario: Implicit read range
 
