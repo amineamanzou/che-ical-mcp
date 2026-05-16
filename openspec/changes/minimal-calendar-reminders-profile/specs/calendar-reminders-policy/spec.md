@@ -47,3 +47,33 @@ The self-update command SHALL be disabled unless the operator explicitly enables
 
 - **WHEN** the process receives `--self-update` without the explicit enablement flag
 - **THEN** the command SHALL refuse to query GitHub Releases or download assets
+
+### Requirement: Runtime policy can scope accessible calendars and reminder lists
+
+The MCP server SHALL allow operators to configure an allowlist of calendar and reminder list names that applies before tool dispatch.
+
+#### Scenario: Calendar outside allowlist
+
+- **WHEN** a tool call includes a `calendar_name`, `target_calendar`, `calendar_names`, or batch item `calendar_name` outside the configured allowlist
+- **THEN** the server SHALL reject the call before invoking the handler
+- **AND** the error message SHALL NOT include the supplied calendar or reminder list name
+
+### Requirement: Runtime policy can cap read blast radius
+
+The MCP server SHALL allow operators to configure maximum result-count and date-range caps for scoped read tools.
+
+#### Scenario: Oversized read request
+
+- **WHEN** a read tool call supplies a `limit` or date range above the configured policy cap
+- **THEN** the server SHALL reject the call before invoking the handler
+- **AND** the audit entry SHALL NOT include tool arguments or EventKit-derived content
+
+### Requirement: Runtime policy can require server-side confirmation for mutations
+
+The MCP server SHALL allow operators to configure a confirmation token required for write-safe and destructive tools.
+
+#### Scenario: Missing or wrong confirmation token
+
+- **WHEN** a write-safe or destructive tool is called and the configured confirmation token is absent or mismatched
+- **THEN** the server SHALL reject the call before invoking the handler
+- **AND** read-only tools SHALL NOT require that token

@@ -25,6 +25,30 @@ final class PolicyProfileTests: XCTestCase {
         XCTAssertEqual(names, expectedReadTools)
     }
 
+    func testWriteSafeProfileExposesReadAndSafeWriteToolsButNotDestructiveTools() {
+        let names = Set(CheICalMCPServer
+            .defineTools(policy: ToolPolicy(profile: .writeSafe))
+            .map(\.name))
+
+        XCTAssertTrue(names.contains("list_events"))
+        XCTAssertTrue(names.contains("create_event"))
+        XCTAssertTrue(names.contains("create_reminder"))
+        XCTAssertFalse(names.contains("delete_event"))
+        XCTAssertFalse(names.contains("cleanup_completed_reminders"))
+    }
+
+    func testDestructiveProfileExposesAllMutationTools() {
+        let names = Set(CheICalMCPServer
+            .defineTools(policy: ToolPolicy(profile: .destructive))
+            .map(\.name))
+
+        XCTAssertTrue(names.contains("list_events"))
+        XCTAssertTrue(names.contains("create_event"))
+        XCTAssertTrue(names.contains("delete_event"))
+        XCTAssertTrue(names.contains("delete_events_batch"))
+        XCTAssertTrue(names.contains("cleanup_completed_reminders"))
+    }
+
     func testReadProfileDeniesKnownMutationBeforeHandlerValidation() async throws {
         let server = try await CheICalMCPServer(policy: .readOnly)
 
@@ -68,5 +92,175 @@ final class PolicyProfileTests: XCTestCase {
         XCTAssertFalse(line.contains("title"))
         XCTAssertFalse(line.contains("notes"))
         XCTAssertFalse(line.contains("calendar_name"))
+    }
+
+    func testAllowlistDeniesTopLevelCalendarOutsideConfiguredSet() {
+        let policy = ToolPolicy(profile: .writeSafe, allowedCalendars: ["Work"])
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["calendar_name": .string("Work")]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["calendar_name": .string("Personal")]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_event")
+            XCTAssertEqual(profile, "write_safe")
+            XCTAssertFalse(String(describing: error).contains("Personal"))
+        }
+    }
+
+    func testAllowlistChecksNestedBatchEventCalendarNames() {
+        let policy = ToolPolicy(profile: .writeSafe, allowedCalendars: ["Work"])
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_events_batch",
+            arguments: [
+                "events": .array([
+                    .object([
+                        "title": .string("ok"),
+                        "start_time": .string("2026-01-01T10:00:00"),
+                        "end_time": .string("2026-01-01T11:00:00"),
+                        "calendar_name": .string("Personal"),
+                    ])
+                ])
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_events_batch")
+            XCTAssertEqual(profile, "write_safe")
+        }
+    }
+
+    func testConfirmationTokenRequiredWhenConfiguredForWriteTool() {
+        let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
+
+        XCTAssertThrowsError(try policy.authorize(toolName: "create_event", arguments: [:])) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_event")
+            XCTAssertEqual(profile, "write_safe")
+        }
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["confirmation_token": .string("wrong")]
+        ))
+    }
+
+    func testConfirmationTokenAllowsConfiguredWriteTool() {
+        let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["confirmation_token": .string("approve-local-write")]
+        ))
+        XCTAssertNoThrow(try policy.authorize(toolName: "list_events", arguments: [
+            "start_date": .string("2026-01-01"),
+            "end_date": .string("2026-01-02"),
+        ]))
+    }
+
+    func testMaxResultCountDeniesOversizedLimit() {
+        let policy = ToolPolicy(profile: .read, maxResultCount: 50)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+                "limit": .int(50),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+                "limit": .int(51),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_events")
+            XCTAssertEqual(profile, "read")
+        }
+    }
+
+    func testMaxResultCountRequiresExplicitLimitForLimitAwareTools() {
+        let policy = ToolPolicy(profile: .read, maxResultCount: 50)
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_events")
+            XCTAssertEqual(profile, "read")
+        }
+    }
+
+    func testMaxDateRangeDeniesOversizedRange() {
+        let policy = ToolPolicy(profile: .read, maxDateRangeDays: 30)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-31"),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-02-01"),
+            ]
+        ))
+    }
+
+    func testPolicyFromEnvironmentParsesRuntimeConstraints() {
+        let policy = ToolPolicy.fromEnvironment([
+            "CHE_ICAL_MCP_PROFILE": "destructive",
+            "CHE_ICAL_MCP_ALLOWED_CALENDARS": "Work, Personal",
+            "CHE_ICAL_MCP_MAX_DATE_RANGE_DAYS": "14",
+            "CHE_ICAL_MCP_MAX_RESULT_COUNT": "25",
+            "CHE_ICAL_MCP_CONFIRMATION_TOKEN": "confirm-local",
+        ])
+
+        XCTAssertEqual(policy.profile, .destructive)
+        XCTAssertEqual(policy.allowedCalendars, ["Work", "Personal"])
+        XCTAssertEqual(policy.maxDateRangeDays, 14)
+        XCTAssertEqual(policy.maxResultCount, 25)
+        XCTAssertEqual(policy.confirmationToken, "confirm-local")
+        XCTAssertTrue(policy.configurationErrors.isEmpty)
+    }
+
+    func testInvalidRuntimeCapFailsClosed() {
+        let policy = ToolPolicy.fromEnvironment([
+            "CHE_ICAL_MCP_MAX_RESULT_COUNT": "many",
+        ])
+
+        XCTAssertFalse(policy.configurationErrors.isEmpty)
+        XCTAssertThrowsError(try policy.authorize(toolName: "list_calendars", arguments: [:])) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_calendars")
+            XCTAssertEqual(profile, "read")
+        }
     }
 }

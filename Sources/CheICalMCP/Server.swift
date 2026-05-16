@@ -1084,7 +1084,7 @@ class CheICalMCPServer {
 
     func executeToolCall(name: String, arguments: [String: Value]) async throws -> String {
         do {
-            try policy.authorize(toolName: name)
+            try policy.authorize(toolName: name, arguments: arguments)
             auditLogger.record(decision: "allow", profile: policy.profileName, tool: name)
         } catch let error as ToolError {
             if case .policyDenied = error {
