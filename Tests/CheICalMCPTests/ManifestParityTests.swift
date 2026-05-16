@@ -40,7 +40,11 @@ final class ManifestParityTests: XCTestCase {
         }
 
         let manifestNames = Set(tools.compactMap { $0["name"] as? String })
-        let declaredNames = Set(CheICalMCPServer.defineTools().map { $0.name })
+        let declaredNames = Set(
+            CheICalMCPServer
+                .defineTools(policy: ToolPolicy(profile: .destructive))
+                .map { $0.name }
+        )
 
         let missingFromManifest = declaredNames.subtracting(manifestNames)
         let extraInManifest = manifestNames.subtracting(declaredNames)

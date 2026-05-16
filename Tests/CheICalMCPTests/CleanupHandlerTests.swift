@@ -24,7 +24,10 @@ final class CleanupHandlerTests: XCTestCase {
         fake: FakeEventKitManager,
         arguments: [String: Value]
     ) async throws -> [String: Any] {
-        let server = try await CheICalMCPServer(reminderCleanupSource: fake)
+        let server = try await CheICalMCPServer(
+            reminderCleanupSource: fake,
+            policy: ToolPolicy(profile: .destructive)
+        )
         let json = try await server.executeToolCall(
             name: "cleanup_completed_reminders",
             arguments: arguments
@@ -36,7 +39,10 @@ final class CleanupHandlerTests: XCTestCase {
 
     func testF1GuardFiresBeforeListReminders() async throws {
         let fake = FakeEventKitManager()
-        let server = try await CheICalMCPServer(reminderCleanupSource: fake)
+        let server = try await CheICalMCPServer(
+            reminderCleanupSource: fake,
+            policy: ToolPolicy(profile: .destructive)
+        )
 
         do {
             _ = try await server.executeToolCall(
@@ -140,7 +146,10 @@ final class CleanupHandlerTests: XCTestCase {
     // call to `requireStringIfPresent` would fail loudly.
     func testFilterModeRejectsNonStringCalendarSource() async throws {
         let fake = FakeEventKitManager()
-        let server = try await CheICalMCPServer(reminderCleanupSource: fake)
+        let server = try await CheICalMCPServer(
+            reminderCleanupSource: fake,
+            policy: ToolPolicy(profile: .destructive)
+        )
 
         do {
             _ = try await server.executeToolCall(

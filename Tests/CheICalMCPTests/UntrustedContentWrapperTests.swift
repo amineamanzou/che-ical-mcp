@@ -55,6 +55,13 @@ final class UntrustedContentWrapperTests: XCTestCase {
 
     // MARK: - readTools allowlist
 
+    func testReadToolsIncludesCalendarListing() {
+        XCTAssertTrue(
+            UntrustedContentWrapper.readTools.contains("list_calendars"),
+            "Calendar and reminder list names are EventKit-derived content and must be wrapped"
+        )
+    }
+
     func testReadToolsIncludesAllEventReadEndpoints() {
         let expected: Set<String> = [
             "list_events", "search_events", "list_events_quick",

@@ -58,6 +58,8 @@ class CheICalMCPServer {
 
     /// All available tools
     private let tools: [Tool]
+    private let policy: ToolPolicy
+    private let auditLogger: PolicyAuditLogger
 
     /// Constructor with per-feature test seams.
     ///
@@ -67,14 +69,20 @@ class CheICalMCPServer {
     /// `CleanupHandlerTests` passes a `FakeEventKitManager`. New handlers that
     /// need a test fake should add their own narrow `*Source` parameter here
     /// rather than widening `EventKitManaging`.
-    init(reminderCleanupSource: any EventKitManaging = EventKitManager.shared) async throws {
+    init(
+        reminderCleanupSource: any EventKitManaging = EventKitManager.shared,
+        policy: ToolPolicy = .default,
+        auditLogger: PolicyAuditLogger = .default
+    ) async throws {
         self.reminderCleanupSource = reminderCleanupSource
+        self.policy = policy
+        self.auditLogger = auditLogger
 
         dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime]
 
         // Define all tools
-        tools = Self.defineTools()
+        tools = Self.defineTools(policy: policy)
 
         // Create server with tools capability
         server = Server(
@@ -98,8 +106,8 @@ class CheICalMCPServer {
 
     // Exposed as `internal` (not `private`) so tests can enumerate the tool
     // list and verify every declared name is dispatched in `executeToolCall`.
-    static func defineTools() -> [Tool] {
-        [
+    static func defineTools(policy: ToolPolicy = .default) -> [Tool] {
+        let allTools: [Tool] = [
             // Calendar Tools
             Tool(
                 name: "list_calendars",
@@ -1019,6 +1027,39 @@ class CheICalMCPServer {
                 annotations: .init(readOnlyHint: false, destructiveHint: true, openWorldHint: false)
             ),
         ]
+        let exposedTools = allTools.filter { policy.shouldExpose(toolName: $0.name) }
+        return exposedTools.map { tool in
+            guard policy.requiresConfirmation(toolName: tool.name) else { return tool }
+            return toolWithConfirmationTokenSchema(tool)
+        }
+    }
+
+    private static func toolWithConfirmationTokenSchema(_ tool: Tool) -> Tool {
+        Tool(
+            name: tool.name,
+            description: tool.description,
+            inputSchema: schemaWithConfirmationToken(tool.inputSchema),
+            annotations: tool.annotations
+        )
+    }
+
+    private static func schemaWithConfirmationToken(_ schema: Value) -> Value {
+        guard var schemaObject = schema.objectValue else { return schema }
+
+        var properties = schemaObject["properties"]?.objectValue ?? [:]
+        properties["confirmation_token"] = .object([
+            "type": .string("string"),
+            "description": .string("Confirmation token required when CHE_ICAL_MCP_CONFIRMATION_TOKEN is configured.")
+        ])
+        schemaObject["properties"] = .object(properties)
+
+        var required = schemaObject["required"]?.arrayValue ?? []
+        if !required.contains(where: { $0.stringValue == "confirmation_token" }) {
+            required.append(.string("confirmation_token"))
+        }
+        schemaObject["required"] = .array(required)
+
+        return .object(schemaObject)
     }
 
     // MARK: - Handler Registration
@@ -1074,6 +1115,16 @@ class CheICalMCPServer {
     }
 
     func executeToolCall(name: String, arguments: [String: Value]) async throws -> String {
+        do {
+            try policy.authorize(toolName: name, arguments: arguments)
+            auditLogger.record(decision: "allow", profile: policy.profileName, tool: name)
+        } catch let error as ToolError {
+            if case .policyDenied = error {
+                auditLogger.record(decision: "deny", profile: policy.profileName, tool: name)
+            }
+            throw error
+        }
+
         switch name {
         // Calendar Tools
         case "list_calendars":
@@ -3222,6 +3273,7 @@ class CheICalMCPServer {
 enum ToolError: LocalizedError {
     case invalidParameter(_ message: String)
     case unknownTool(_ name: String)
+    case policyDenied(name: String, profile: String)
 
     var errorDescription: String? {
         switch self {
@@ -3229,6 +3281,8 @@ enum ToolError: LocalizedError {
             return "Invalid parameter: \(message)"
         case .unknownTool(let name):
             return "Unknown tool: \(name)"
+        case .policyDenied(let name, let profile):
+            return "Tool '\(name)' is not allowed by capability profile '\(profile)'"
         }
     }
 }
