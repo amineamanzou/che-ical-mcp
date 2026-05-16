@@ -202,6 +202,35 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testAllowlistDeniesSpoofedScopeForIdSelectedMutationTools() {
+        let policy = ToolPolicy(profile: .destructive, allowedCalendars: ["Work"])
+
+        let cases: [(tool: String, arguments: [String: Value])] = [
+            ("update_calendar", ["id": .string("calendar-id"), "title": .string("Work")]),
+            ("update_event", ["event_id": .string("event-id"), "calendar_name": .string("Work")]),
+            ("update_reminder", ["reminder_id": .string("reminder-id"), "calendar_name": .string("Work")]),
+            ("complete_reminder", ["reminder_id": .string("reminder-id"), "calendar_name": .string("Work")]),
+            ("copy_event", ["event_id": .string("event-id"), "target_calendar": .string("Work")]),
+            ("move_events_batch", [
+                "event_ids": .array([.string("event-id")]),
+                "target_calendar": .string("Work"),
+            ]),
+        ]
+
+        for testCase in cases {
+            XCTAssertThrowsError(try policy.authorize(
+                toolName: testCase.tool,
+                arguments: testCase.arguments
+            )) { error in
+                guard case ToolError.policyDenied(let name, let profile) = error else {
+                    return XCTFail("Expected policyDenied for \(testCase.tool), got \(error)")
+                }
+                XCTAssertEqual(name, testCase.tool)
+                XCTAssertEqual(profile, "destructive")
+            }
+        }
+    }
+
     func testConfirmationTokenRequiredWhenConfiguredForWriteTool() {
         let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
 
@@ -217,6 +246,25 @@ final class PolicyProfileTests: XCTestCase {
             toolName: "create_event",
             arguments: ["confirmation_token": .string("wrong")]
         ))
+    }
+
+    func testEmptyConfirmationTokenEnvironmentFailsClosed() {
+        let policy = ToolPolicy.fromEnvironment([
+            "CHE_ICAL_MCP_PROFILE": "write_safe",
+            "CHE_ICAL_MCP_CONFIRMATION_TOKEN": " \t ",
+        ])
+
+        XCTAssertTrue(policy.configurationErrors.contains("CHE_ICAL_MCP_CONFIRMATION_TOKEN"))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["calendar_name": .string("Work")]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_event")
+            XCTAssertEqual(profile, "write_safe")
+        }
     }
 
     func testConfirmationTokenAllowsConfiguredWriteTool() {

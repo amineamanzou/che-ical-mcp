@@ -57,7 +57,10 @@ struct ToolPolicy: Sendable {
                 key: "CHE_ICAL_MCP_MAX_RESULT_COUNT",
                 configurationErrors: &configurationErrors
             ),
-            confirmationToken: nonEmptyString(from: environment["CHE_ICAL_MCP_CONFIRMATION_TOKEN"]),
+            confirmationToken: confirmationToken(
+                from: environment["CHE_ICAL_MCP_CONFIRMATION_TOKEN"],
+                configurationErrors: &configurationErrors
+            ),
             configurationErrors: configurationErrors
         )
     }
@@ -168,6 +171,19 @@ struct ToolPolicy: Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func confirmationToken(
+        from raw: String?,
+        configurationErrors: inout Set<String>
+    ) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            configurationErrors.insert("CHE_ICAL_MCP_CONFIRMATION_TOKEN")
+            return nil
+        }
+        return trimmed
+    }
+
     private func enforceConfirmation(toolName: String, arguments: [String: Value]) throws {
         guard let confirmationToken,
               Self.writeSafeTools.contains(toolName) || Self.destructiveTools.contains(toolName)
@@ -197,7 +213,7 @@ struct ToolPolicy: Sendable {
     private func calendarNamesToCheck(toolName: String, arguments: [String: Value]) throws -> [String] {
         var names: [String] = []
 
-        guard !Self.idOnlyMutationTools.contains(toolName) else {
+        guard !Self.idSelectedMutationTools.contains(toolName) else {
             throw ToolError.policyDenied(name: toolName, profile: profileName)
         }
 
@@ -213,7 +229,7 @@ struct ToolPolicy: Sendable {
         try appendStringArgument("target_calendar", from: arguments, toolName: toolName, to: &names)
         try appendStringArrayArgument("calendar_names", from: arguments, toolName: toolName, to: &names)
 
-        if toolName == "create_calendar" || toolName == "update_calendar" {
+        if toolName == "create_calendar" {
             try appendStringArgument("title", from: arguments, toolName: toolName, to: &names)
         }
 
@@ -223,11 +239,17 @@ struct ToolPolicy: Sendable {
         return names
     }
 
-    private static let idOnlyMutationTools: Set<String> = [
+    private static let idSelectedMutationTools: Set<String> = [
         "delete_calendar",
         "delete_event",
         "delete_reminder",
         "delete_reminders_batch",
+        "update_calendar",
+        "update_event",
+        "update_reminder",
+        "complete_reminder",
+        "copy_event",
+        "move_events_batch",
     ]
 
     private func appendStringArgument(

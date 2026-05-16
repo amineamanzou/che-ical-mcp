@@ -63,9 +63,9 @@ The MCP server SHALL allow operators to configure an allowlist of calendar and r
 - **WHEN** the allowlist is configured and a calendar/list-aware tool call omits a scoped calendar or reminder list argument
 - **THEN** the server SHALL reject the call before invoking the handler
 
-#### Scenario: ID-only mutation with spoofed allowlist scope
+#### Scenario: ID-selected mutation with spoofed allowlist scope
 
-- **WHEN** the allowlist is configured and an ID-only destructive tool call includes an otherwise allowed calendar or reminder list field that the handler does not use as scope
+- **WHEN** the allowlist is configured and an ID-selected mutation tool call includes an otherwise allowed calendar or reminder list field that the handler does not use as proof of the source scope
 - **THEN** the server SHALL reject the call before invoking the handler
 
 #### Scenario: Binding cleanup with spoofed allowlist scope
@@ -102,3 +102,9 @@ The MCP server SHALL allow operators to configure a confirmation token required 
 - **WHEN** a write-safe or destructive tool is called and the configured confirmation token is absent or mismatched
 - **THEN** the server SHALL reject the call before invoking the handler
 - **AND** read-only tools SHALL NOT require that token
+
+#### Scenario: Empty configured confirmation token
+
+- **WHEN** the confirmation token environment variable is present but empty or whitespace-only
+- **THEN** the server SHALL treat it as a configuration error
+- **AND** the server SHALL reject tool calls before invoking handlers
