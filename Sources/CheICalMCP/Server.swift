@@ -1027,7 +1027,39 @@ class CheICalMCPServer {
                 annotations: .init(readOnlyHint: false, destructiveHint: true, openWorldHint: false)
             ),
         ]
-        return allTools.filter { policy.shouldExpose(toolName: $0.name) }
+        let exposedTools = allTools.filter { policy.shouldExpose(toolName: $0.name) }
+        return exposedTools.map { tool in
+            guard policy.requiresConfirmation(toolName: tool.name) else { return tool }
+            return toolWithConfirmationTokenSchema(tool)
+        }
+    }
+
+    private static func toolWithConfirmationTokenSchema(_ tool: Tool) -> Tool {
+        Tool(
+            name: tool.name,
+            description: tool.description,
+            inputSchema: schemaWithConfirmationToken(tool.inputSchema),
+            annotations: tool.annotations
+        )
+    }
+
+    private static func schemaWithConfirmationToken(_ schema: Value) -> Value {
+        guard var schemaObject = schema.objectValue else { return schema }
+
+        var properties = schemaObject["properties"]?.objectValue ?? [:]
+        properties["confirmation_token"] = .object([
+            "type": .string("string"),
+            "description": .string("Confirmation token required when CHE_ICAL_MCP_CONFIRMATION_TOKEN is configured.")
+        ])
+        schemaObject["properties"] = .object(properties)
+
+        var required = schemaObject["required"]?.arrayValue ?? []
+        if !required.contains(where: { $0.stringValue == "confirmation_token" }) {
+            required.append(.string("confirmation_token"))
+        }
+        schemaObject["required"] = .array(required)
+
+        return .object(schemaObject)
     }
 
     // MARK: - Handler Registration

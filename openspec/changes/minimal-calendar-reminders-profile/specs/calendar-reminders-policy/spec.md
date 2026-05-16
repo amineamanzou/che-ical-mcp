@@ -88,6 +88,12 @@ The MCP server SHALL allow operators to configure an allowlist of calendar and r
 - **WHEN** the allowlist is configured and `cleanup_completed_reminders` is called with `reminder_ids`
 - **THEN** the server SHALL reject the call before invoking the handler
 
+#### Scenario: Empty configured allowlist
+
+- **WHEN** the allowlist environment variable is present but empty or whitespace-only
+- **THEN** the server SHALL treat it as a configuration error
+- **AND** the server SHALL reject tool calls before invoking handlers
+
 ### Requirement: Runtime policy can cap read blast radius
 
 The MCP server SHALL allow operators to configure maximum result-count and date-range caps for scoped read tools.
@@ -108,6 +114,11 @@ The MCP server SHALL allow operators to configure maximum result-count and date-
 - **WHEN** a read tool would use an implicit date range while a date-range cap is configured
 - **THEN** the server SHALL reject the call unless the implicit range is known and within the configured cap
 
+#### Scenario: Mutation event duration
+
+- **WHEN** a write-safe mutation supplies `start_time` and `end_time` values whose duration is above the configured date-range cap
+- **THEN** the date-range cap SHALL NOT reject the mutation solely because of that event duration
+
 ### Requirement: Runtime policy can require server-side confirmation for mutations
 
 The MCP server SHALL allow operators to configure a confirmation token required for write-safe and destructive tools.
@@ -123,3 +134,9 @@ The MCP server SHALL allow operators to configure a confirmation token required 
 - **WHEN** the confirmation token environment variable is present but empty or whitespace-only
 - **THEN** the server SHALL treat it as a configuration error
 - **AND** the server SHALL reject tool calls before invoking handlers
+
+#### Scenario: Mutation schemas expose confirmation token
+
+- **WHEN** the confirmation token is configured and an MCP client lists tools
+- **THEN** write-safe and destructive tool schemas SHALL include a `confirmation_token` input property
+- **AND** read-only tool schemas SHALL NOT require that token

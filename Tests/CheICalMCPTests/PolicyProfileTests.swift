@@ -370,6 +370,51 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testConfirmationTokenIsAdvertisedInMutationToolSchemasWhenConfigured() {
+        let policy = ToolPolicy(profile: .destructive, confirmationToken: "approve-local-write")
+        let tools = Dictionary(uniqueKeysWithValues: CheICalMCPServer
+            .defineTools(policy: policy)
+            .map { ($0.name, $0) })
+
+        let mutationTools: Set<String> = [
+            "create_calendar",
+            "update_calendar",
+            "create_event",
+            "update_event",
+            "create_reminder",
+            "update_reminder",
+            "complete_reminder",
+            "create_events_batch",
+            "create_reminders_batch",
+            "delete_calendar",
+            "delete_event",
+            "undo",
+            "redo",
+            "undo_history",
+            "delete_reminder",
+            "copy_event",
+            "move_events_batch",
+            "delete_events_batch",
+            "delete_reminders_batch",
+            "cleanup_completed_reminders",
+        ]
+
+        for toolName in mutationTools {
+            guard let tool = tools[toolName] else {
+                XCTFail("Expected \(toolName) to be exposed")
+                continue
+            }
+            let properties = tool.inputSchema.objectValue?["properties"]?.objectValue
+            let required = tool.inputSchema.objectValue?["required"]?.arrayValue ?? []
+
+            XCTAssertNotNil(properties?["confirmation_token"], "\(toolName) should advertise confirmation_token")
+            XCTAssertTrue(required.contains { $0.stringValue == "confirmation_token" }, "\(toolName) should require confirmation_token")
+        }
+
+        let readProperties = tools["list_events"]?.inputSchema.objectValue?["properties"]?.objectValue
+        XCTAssertNil(readProperties?["confirmation_token"])
+    }
+
     func testConfirmationTokenAllowsConfiguredWriteTool() {
         let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
 
@@ -472,6 +517,40 @@ final class PolicyProfileTests: XCTestCase {
         ))
     }
 
+    func testMaxDateRangeAppliesOnlyToRangeReadTools() {
+        let policy = ToolPolicy(profile: .writeSafe, maxDateRangeDays: 1)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "update_event",
+            arguments: [
+                "event_id": .string("event-id"),
+                "start_time": .string("2026-01-01T10:00:00"),
+            ]
+        ))
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "create_event",
+            arguments: [
+                "title": .string("long workshop"),
+                "start_time": .string("2026-01-01T10:00:00"),
+                "end_time": .string("2026-01-03T10:00:00"),
+                "calendar_name": .string("Work"),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_events",
+            arguments: [
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-03"),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_events")
+            XCTAssertEqual(profile, "write_safe")
+        }
+    }
+
     func testMaxDateRangeDeniesSearchEventsImplicitDefaultRange() {
         let policy = ToolPolicy(profile: .read, maxDateRangeDays: 30)
 
@@ -530,6 +609,25 @@ final class PolicyProfileTests: XCTestCase {
         XCTAssertEqual(policy.maxResultCount, 25)
         XCTAssertEqual(policy.confirmationToken, "confirm-local")
         XCTAssertTrue(policy.configurationErrors.isEmpty)
+    }
+
+    func testEmptyCalendarAllowlistEnvironmentFailsClosed() {
+        let policy = ToolPolicy.fromEnvironment([
+            "CHE_ICAL_MCP_PROFILE": "write_safe",
+            "CHE_ICAL_MCP_ALLOWED_CALENDARS": " \t ",
+        ])
+
+        XCTAssertTrue(policy.configurationErrors.contains("CHE_ICAL_MCP_ALLOWED_CALENDARS"))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_event",
+            arguments: ["calendar_name": .string("Work")]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_event")
+            XCTAssertEqual(profile, "write_safe")
+        }
     }
 
     func testInvalidRuntimeCapFailsClosed() {

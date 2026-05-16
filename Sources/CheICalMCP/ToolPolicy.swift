@@ -46,7 +46,10 @@ struct ToolPolicy: Sendable {
         var configurationErrors = Set<String>()
         return ToolPolicy(
             profile: .fromEnvironment(environment),
-            allowedCalendars: allowedCalendars(from: environment["CHE_ICAL_MCP_ALLOWED_CALENDARS"]),
+            allowedCalendars: allowedCalendars(
+                from: environment["CHE_ICAL_MCP_ALLOWED_CALENDARS"],
+                configurationErrors: &configurationErrors
+            ),
             maxDateRangeDays: positiveInt(
                 from: environment["CHE_ICAL_MCP_MAX_DATE_RANGE_DAYS"],
                 key: "CHE_ICAL_MCP_MAX_DATE_RANGE_DAYS",
@@ -115,6 +118,10 @@ struct ToolPolicy: Sendable {
         allowedTools.contains(toolName)
     }
 
+    func requiresConfirmation(toolName: String) -> Bool {
+        confirmationToken != nil && (Self.writeSafeTools.contains(toolName) || Self.destructiveTools.contains(toolName))
+    }
+
     func authorize(toolName: String, arguments: [String: Value] = [:]) throws {
         guard Self.knownTools.contains(toolName) else {
             throw ToolError.unknownTool(toolName)
@@ -143,13 +150,20 @@ struct ToolPolicy: Sendable {
         }
     }
 
-    private static func allowedCalendars(from raw: String?) -> Set<String>? {
+    private static func allowedCalendars(
+        from raw: String?,
+        configurationErrors: inout Set<String>
+    ) -> Set<String>? {
         guard let raw else { return nil }
         let names = raw
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        return names.isEmpty ? nil : Set(names)
+        guard !names.isEmpty else {
+            configurationErrors.insert("CHE_ICAL_MCP_ALLOWED_CALENDARS")
+            return nil
+        }
+        return Set(names)
     }
 
     private static func positiveInt(
@@ -390,7 +404,11 @@ struct ToolPolicy: Sendable {
     }
 
     private func enforceMaxDateRange(toolName: String, arguments: [String: Value]) throws {
-        guard let maxDateRangeDays else { return }
+        guard let maxDateRangeDays,
+              Self.dateRangeCappedTools.contains(toolName)
+        else {
+            return
+        }
 
         try enforceImplicitDateRange(toolName: toolName, arguments: arguments, maxDateRangeDays: maxDateRangeDays)
         try enforceDateRangePair(
@@ -443,6 +461,14 @@ struct ToolPolicy: Sendable {
         "next_7_days": 7,
         "next_30_days": 30,
         "this_month": 31,
+    ]
+
+    private static let dateRangeCappedTools: Set<String> = [
+        "list_events",
+        "search_events",
+        "list_events_quick",
+        "check_conflicts",
+        "find_duplicate_events",
     ]
 
     private func enforceDateRangePair(
