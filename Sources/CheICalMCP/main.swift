@@ -14,6 +14,12 @@ if CommandLine.arguments.contains("--help") || CommandLine.arguments.contains("-
 }
 
 if CommandLine.arguments.contains("--self-update") {
+    guard SelfUpdate.isEnabled() else {
+        FileHandle.standardError.write(
+            Data("Self-update is disabled by default. Set CHE_ICAL_MCP_ENABLE_SELF_UPDATE=1 to enable it for this process.\n".utf8)
+        )
+        exit(2)
+    }
     do {
         try await SelfUpdate.run()
         exit(0)

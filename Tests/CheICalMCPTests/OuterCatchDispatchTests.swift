@@ -39,7 +39,10 @@ final class OuterCatchDispatchTests: XCTestCase {
                 userInfo: [NSLocalizedDescriptionKey: "Apple-produced text that must not leak"]
             )
         )
-        let server = try await CheICalMCPServer(reminderCleanupSource: fake)
+        let server = try await CheICalMCPServer(
+            reminderCleanupSource: fake,
+            policy: ToolPolicy(profile: .destructive)
+        )
 
         let result = await server.handleToolCallForTesting(
             name: "cleanup_completed_reminders",

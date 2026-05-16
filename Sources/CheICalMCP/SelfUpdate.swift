@@ -90,6 +90,13 @@ enum SelfUpdate {
     /// Matches the asset created by `make release-signed` + `gh release create`.
     static let assetName = "CheICalMCP"
 
+    static func isEnabled(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard let raw = environment["CHE_ICAL_MCP_ENABLE_SELF_UPDATE"]?.lowercased() else {
+            return false
+        }
+        return raw == "1" || raw == "true" || raw == "yes"
+    }
+
     /// Run the self-update flow. Prints user-facing progress to stdout.
     /// Throws on any failure mode (network, parse, download, install).
     /// Returns silently on success — caller exits 0.

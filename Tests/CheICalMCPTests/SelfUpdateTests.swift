@@ -14,6 +14,17 @@ import XCTest
 /// asset URL pattern, etc.).
 final class SelfUpdateTests: XCTestCase {
 
+    // MARK: - enablement gate
+
+    func testSelfUpdateDisabledByDefault() {
+        XCTAssertFalse(SelfUpdate.isEnabled(environment: [:]))
+    }
+
+    func testSelfUpdateEnabledByExplicitEnvironmentFlag() {
+        XCTAssertTrue(SelfUpdate.isEnabled(environment: ["CHE_ICAL_MCP_ENABLE_SELF_UPDATE": "1"]))
+        XCTAssertTrue(SelfUpdate.isEnabled(environment: ["CHE_ICAL_MCP_ENABLE_SELF_UPDATE": "true"]))
+    }
+
     // MARK: - stripTagPrefix
 
     func testStripTagPrefixRemovesLeadingV() {
