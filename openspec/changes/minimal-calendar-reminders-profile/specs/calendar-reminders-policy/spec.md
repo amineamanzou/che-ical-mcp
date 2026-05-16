@@ -63,6 +63,21 @@ The MCP server SHALL allow operators to configure an allowlist of calendar and r
 - **WHEN** the allowlist is configured and a calendar/list-aware tool call omits a scoped calendar or reminder list argument
 - **THEN** the server SHALL reject the call before invoking the handler
 
+#### Scenario: Unused allowlist scope field
+
+- **WHEN** the allowlist is configured and a tool call includes an otherwise allowed calendar or reminder list field that the selected handler does not use as scope
+- **THEN** the server SHALL reject the call before invoking the handler
+
+#### Scenario: Tool without pre-dispatch scope
+
+- **WHEN** the allowlist is configured and a tool cannot prove calendar or reminder list scope from handler-used arguments before dispatch
+- **THEN** the server SHALL reject the call before invoking the handler
+
+#### Scenario: Partially scoped batch create
+
+- **WHEN** the allowlist is configured and a batch create tool omits `calendar_name` from any item
+- **THEN** the server SHALL reject the call before invoking the handler
+
 #### Scenario: ID-selected mutation with spoofed allowlist scope
 
 - **WHEN** the allowlist is configured and an ID-selected mutation tool call includes an otherwise allowed calendar or reminder list field that the handler does not use as proof of the source scope

@@ -217,24 +217,48 @@ struct ToolPolicy: Sendable {
             throw ToolError.policyDenied(name: toolName, profile: profileName)
         }
 
-        if toolName == "cleanup_completed_reminders", arguments["reminder_ids"] != nil {
+        switch toolName {
+        case "list_calendars", "undo", "redo", "undo_history":
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+
+        case "list_events",
+             "search_events",
+             "list_events_quick",
+             "check_conflicts",
+             "list_reminders",
+             "search_reminders",
+             "list_reminder_tags",
+             "create_event",
+             "create_reminder":
+            try appendRequiredStringArgument("calendar_name", from: arguments, toolName: toolName, to: &names)
+
+        case "cleanup_completed_reminders":
+            guard arguments["reminder_ids"] == nil else {
+                throw ToolError.policyDenied(name: toolName, profile: profileName)
+            }
+            try appendRequiredStringArgument("calendar_name", from: arguments, toolName: toolName, to: &names)
+
+        case "delete_events_batch":
+            guard arguments["event_ids"] == nil else {
+                throw ToolError.policyDenied(name: toolName, profile: profileName)
+            }
+            try appendRequiredStringArgument("calendar_name", from: arguments, toolName: toolName, to: &names)
+
+        case "find_duplicate_events":
+            try appendRequiredStringArrayArgument("calendar_names", from: arguments, toolName: toolName, to: &names)
+
+        case "create_calendar":
+            try appendRequiredStringArgument("title", from: arguments, toolName: toolName, to: &names)
+
+        case "create_events_batch":
+            try appendRequiredBatchCalendarNames("events", from: arguments, toolName: toolName, to: &names)
+
+        case "create_reminders_batch":
+            try appendRequiredBatchCalendarNames("reminders", from: arguments, toolName: toolName, to: &names)
+
+        default:
             throw ToolError.policyDenied(name: toolName, profile: profileName)
         }
-
-        if toolName == "delete_events_batch", arguments["event_ids"] != nil {
-            throw ToolError.policyDenied(name: toolName, profile: profileName)
-        }
-
-        try appendStringArgument("calendar_name", from: arguments, toolName: toolName, to: &names)
-        try appendStringArgument("target_calendar", from: arguments, toolName: toolName, to: &names)
-        try appendStringArrayArgument("calendar_names", from: arguments, toolName: toolName, to: &names)
-
-        if toolName == "create_calendar" {
-            try appendStringArgument("title", from: arguments, toolName: toolName, to: &names)
-        }
-
-        try appendBatchCalendarNames("events", from: arguments, toolName: toolName, to: &names)
-        try appendBatchCalendarNames("reminders", from: arguments, toolName: toolName, to: &names)
 
         return names
     }
@@ -265,6 +289,18 @@ struct ToolPolicy: Sendable {
         names.append(value)
     }
 
+    private func appendRequiredStringArgument(
+        _ key: String,
+        from arguments: [String: Value],
+        toolName: String,
+        to names: inout [String]
+    ) throws {
+        guard arguments[key] != nil else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+        try appendStringArgument(key, from: arguments, toolName: toolName, to: &names)
+    }
+
     private func appendStringArrayArgument(
         _ key: String,
         from arguments: [String: Value],
@@ -283,13 +319,27 @@ struct ToolPolicy: Sendable {
         }
     }
 
-    private func appendBatchCalendarNames(
+    private func appendRequiredStringArrayArgument(
         _ key: String,
         from arguments: [String: Value],
         toolName: String,
         to names: inout [String]
     ) throws {
-        guard let raw = arguments[key] else { return }
+        guard arguments[key] != nil else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
+        try appendStringArrayArgument(key, from: arguments, toolName: toolName, to: &names)
+    }
+
+    private func appendRequiredBatchCalendarNames(
+        _ key: String,
+        from arguments: [String: Value],
+        toolName: String,
+        to names: inout [String]
+    ) throws {
+        guard let raw = arguments[key] else {
+            throw ToolError.policyDenied(name: toolName, profile: profileName)
+        }
         guard let array = raw.arrayValue else {
             throw ToolError.policyDenied(name: toolName, profile: profileName)
         }
@@ -297,7 +347,7 @@ struct ToolPolicy: Sendable {
             guard let object = value.objectValue else {
                 throw ToolError.policyDenied(name: toolName, profile: profileName)
             }
-            try appendStringArgument("calendar_name", from: object, toolName: toolName, to: &names)
+            try appendRequiredStringArgument("calendar_name", from: object, toolName: toolName, to: &names)
         }
     }
 

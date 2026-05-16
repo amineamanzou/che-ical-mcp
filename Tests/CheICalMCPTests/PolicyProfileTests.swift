@@ -231,6 +231,109 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testAllowlistDeniesUnusedScopeFieldsForUnscopedTools() {
+        let policy = ToolPolicy(profile: .destructive, allowedCalendars: ["Work"])
+
+        let cases: [(tool: String, arguments: [String: Value])] = [
+            ("list_calendars", ["calendar_name": .string("Work")]),
+            ("find_duplicate_events", [
+                "calendar_name": .string("Work"),
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+            ]),
+            ("undo", ["calendar_name": .string("Work")]),
+            ("redo", ["calendar_name": .string("Work")]),
+            ("undo_history", [
+                "calendar_name": .string("Work"),
+                "limit": .int(10),
+            ]),
+        ]
+
+        for testCase in cases {
+            XCTAssertThrowsError(try policy.authorize(
+                toolName: testCase.tool,
+                arguments: testCase.arguments
+            )) { error in
+                guard case ToolError.policyDenied(let name, let profile) = error else {
+                    return XCTFail("Expected policyDenied for \(testCase.tool), got \(error)")
+                }
+                XCTAssertEqual(name, testCase.tool)
+                XCTAssertEqual(profile, "destructive")
+            }
+        }
+    }
+
+    func testAllowlistRequiresEveryBatchCreateItemToBeScoped() {
+        let policy = ToolPolicy(profile: .writeSafe, allowedCalendars: ["Work"])
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_events_batch",
+            arguments: [
+                "events": .array([
+                    .object([
+                        "title": .string("ok"),
+                        "start_time": .string("2026-01-01T10:00:00"),
+                        "end_time": .string("2026-01-01T11:00:00"),
+                        "calendar_name": .string("Work"),
+                    ]),
+                    .object([
+                        "title": .string("missing scope"),
+                        "start_time": .string("2026-01-02T10:00:00"),
+                        "end_time": .string("2026-01-02T11:00:00"),
+                    ]),
+                ])
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_events_batch")
+            XCTAssertEqual(profile, "write_safe")
+        }
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "create_reminders_batch",
+            arguments: [
+                "reminders": .array([
+                    .object([
+                        "title": .string("ok"),
+                        "calendar_name": .string("Work"),
+                    ]),
+                    .object([
+                        "title": .string("missing scope"),
+                    ]),
+                ])
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "create_reminders_batch")
+            XCTAssertEqual(profile, "write_safe")
+        }
+    }
+
+    func testAllowlistAcceptsOnlyToolSpecificScopeFields() {
+        let policy = ToolPolicy(profile: .read, allowedCalendars: ["Work"])
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "find_duplicate_events",
+            arguments: [
+                "calendar_names": .array([.string("Work")]),
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "find_duplicate_events",
+            arguments: [
+                "calendar_names": .array([.string("Personal")]),
+                "start_date": .string("2026-01-01"),
+                "end_date": .string("2026-01-02"),
+            ]
+        ))
+    }
+
     func testConfirmationTokenRequiredWhenConfiguredForWriteTool() {
         let policy = ToolPolicy(profile: .writeSafe, confirmationToken: "approve-local-write")
 
