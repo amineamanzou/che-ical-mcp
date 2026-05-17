@@ -1262,6 +1262,7 @@ actor EventKitManager: EventKitManaging {
         }
 
         let wasCompleted = reminder.isCompleted
+        let previousCompletionDate = reminder.completionDate
 
         reminder.isCompleted = completed
         if completed {
@@ -1269,10 +1270,18 @@ actor EventKitManager: EventKitManaging {
         } else {
             reminder.completionDate = nil
         }
+        let newCompletionDate = reminder.completionDate
 
         try eventStore.save(reminder, commit: true)
         markNeedsRefresh()
-        await CalendarUndoManager.shared.record(.completeReminder(id: identifier, wasCompleted: wasCompleted, title: reminder.title ?? ""))
+        await CalendarUndoManager.shared.record(.completeReminder(
+            id: identifier,
+            wasCompleted: wasCompleted,
+            previousCompletionDate: previousCompletionDate,
+            newCompleted: completed,
+            newCompletionDate: newCompletionDate,
+            title: reminder.title ?? ""
+        ))
         return reminder
     }
 
@@ -1565,7 +1574,7 @@ actor EventKitManager: EventKitManaging {
             markNeedsRefresh()
             return "Undone: restored reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(oldSnapshot.title))' to previous state"
 
-        case .completeReminder(let id, let wasCompleted, let title):
+        case .completeReminder(let id, let wasCompleted, let previousCompletionDate, _, _, let title):
             try await ensureReminderAccess()
             let predicate = eventStore.predicateForReminders(in: nil)
             let reminders = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[EKReminder], Error>) in
@@ -1577,6 +1586,7 @@ actor EventKitManager: EventKitManaging {
                 throw EventKitError.reminderNotFound(identifier: id)
             }
             reminder.isCompleted = wasCompleted
+            reminder.completionDate = wasCompleted ? previousCompletionDate : nil
             try eventStore.save(reminder, commit: true)
             markNeedsRefresh()
             return "Undone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(wasCompleted)"
@@ -1614,8 +1624,7 @@ actor EventKitManager: EventKitManaging {
         case .updateReminder(let id, _):
             return "Redo update: the reminder \(id) was restored. Apply your changes again."
 
-        case .completeReminder(let id, let wasCompleted, let title):
-            // Redo = set back to the new state (opposite of wasCompleted)
+        case .completeReminder(let id, _, _, let newCompleted, let newCompletionDate, let title):
             try await ensureReminderAccess()
             let predicate = eventStore.predicateForReminders(in: nil)
             let reminders = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[EKReminder], Error>) in
@@ -1626,10 +1635,11 @@ actor EventKitManager: EventKitManaging {
             guard let reminder = reminders.first(where: { $0.calendarItemIdentifier == id }) else {
                 throw EventKitError.reminderNotFound(identifier: id)
             }
-            reminder.isCompleted = !wasCompleted
+            reminder.isCompleted = newCompleted
+            reminder.completionDate = newCompleted ? newCompletionDate : nil
             try eventStore.save(reminder, commit: true)
             markNeedsRefresh()
-            return "Redone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(!wasCompleted)"
+            return "Redone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(newCompleted)"
 
         case .batch(let ops):
             var results: [String] = []
