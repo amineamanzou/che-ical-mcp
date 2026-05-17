@@ -1097,7 +1097,8 @@ actor EventKitManager: EventKitManaging {
         calendarSource: String? = nil,
         alarmOffsets: [Int]? = nil,
         recurrenceRule: RecurrenceRuleInput? = nil,
-        locationTrigger: LocationTriggerInput? = nil
+        locationTrigger: LocationTriggerInput? = nil,
+        completionDate: Date? = nil
     ) async throws -> CreateReminderResult {
         try await ensureReminderAccess()
 
@@ -1108,7 +1109,8 @@ actor EventKitManager: EventKitManaging {
         let calendar = try findCalendar(name: name, source: calendarSource, entityType: .reminder)
 
         // Idempotency: check for existing reminder with same title (+due date) on same list
-        if let existing = await findDuplicateReminder(title: title, dueDate: dueDate, calendar: calendar) {
+        if completionDate == nil,
+           let existing = await findDuplicateReminder(title: title, dueDate: dueDate, calendar: calendar) {
             return CreateReminderResult(reminder: existing, isDuplicate: true)
         }
 
@@ -1123,6 +1125,11 @@ actor EventKitManager: EventKitManaging {
                 [.year, .month, .day, .hour, .minute],
                 from: due
             )
+        }
+
+        if let completionDate {
+            reminder.isCompleted = true
+            reminder.completionDate = completionDate
         }
 
         // Add alarms
@@ -1247,7 +1254,7 @@ actor EventKitManager: EventKitManaging {
         return reminder
     }
 
-    func completeReminder(identifier: String, completed: Bool = true) async throws -> EKReminder {
+    func completeReminder(identifier: String, completed: Bool = true, completionDate: Date? = nil) async throws -> EKReminder {
         try await ensureReminderAccess()
 
         guard let reminder = eventStore.calendarItem(withIdentifier: identifier) as? EKReminder else {
@@ -1258,7 +1265,7 @@ actor EventKitManager: EventKitManaging {
 
         reminder.isCompleted = completed
         if completed {
-            reminder.completionDate = Date()
+            reminder.completionDate = completionDate ?? Date()
         } else {
             reminder.completionDate = nil
         }

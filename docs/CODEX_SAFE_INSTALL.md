@@ -59,6 +59,18 @@ Notes:
 - `CHE_ICAL_MCP_CONFIRMATION_TOKEN` requires write-safe and destructive tool calls to include a matching `confirmation_token` argument. When configured, mutation tool schemas expose `confirmation_token` so schema-driven MCP clients can send it. Use a per-session token and keep Codex tool approval enabled. If this variable is present but empty or whitespace-only, the server fails closed.
 - Invalid numeric runtime caps fail closed: the server denies tool calls instead of silently ignoring the bad setting.
 
+## Reminder History Live Check
+
+Use a disposable reminder list before relying on historical completion dates:
+
+1. Create a temporary list in Reminders.app, for example `CheICalMCP Disposable Test`.
+2. Call `create_reminder` with that `calendar_name` and `completion_date: "2026-05-10T12:00:00+02:00"`.
+3. Call `list_reminders` with the same `calendar_name`, `filter: "completed"`, `include_diagnostics: true`, and a small `limit`.
+4. Verify the returned reminder is completed and the returned `completion_date` represents the same instant.
+5. Create another reminder in the disposable list, then call `complete_reminder` with `completed: true` and the same `completion_date`.
+6. Read it back with `list_reminders(include_diagnostics: true)` and verify the same instant is returned.
+7. Delete the disposable list after the check.
+
 `--self-update` is disabled unless the process explicitly sets:
 
 ```bash
