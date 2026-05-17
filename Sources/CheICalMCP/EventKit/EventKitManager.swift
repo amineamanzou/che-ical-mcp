@@ -1052,39 +1052,71 @@ actor EventKitManager: EventKitManaging {
         let isDuplicate: Bool
     }
 
-    /// Find an existing incomplete reminder that matches by title on the same list.
-    /// Optionally also matches due date if provided.
+    static func reminderDuplicateMatches(
+        existingTitle: String,
+        existingDueDate: Date?,
+        existingCompletionDate: Date?,
+        requestedTitle: String,
+        requestedDueDate: Date?,
+        requestedCompletionDate: Date?
+    ) -> Bool {
+        guard existingTitle == requestedTitle else { return false }
+
+        switch (existingDueDate, requestedDueDate) {
+        case (nil, nil):
+            break
+        case (let existing?, let requested?):
+            guard abs(existing.timeIntervalSince(requested)) < 60 else { return false }
+        default:
+            return false
+        }
+
+        switch (existingCompletionDate, requestedCompletionDate) {
+        case (nil, nil):
+            return true
+        case (let existing?, let requested?):
+            return abs(existing.timeIntervalSince(requested)) < 60
+        default:
+            return false
+        }
+    }
+
+    /// Find an existing reminder that matches by title, due date, and completion date on the same list.
     private func findDuplicateReminder(
         title: String,
         dueDate: Date?,
+        completionDate: Date?,
         calendar: EKCalendar
     ) async -> EKReminder? {
-        let predicate = eventStore.predicateForIncompleteReminders(
-            withDueDateStarting: nil,
-            ending: nil,
-            calendars: [calendar]
-        )
+        let predicate: NSPredicate
+        if let completionDate {
+            predicate = eventStore.predicateForCompletedReminders(
+                withCompletionDateStarting: completionDate.addingTimeInterval(-60),
+                ending: completionDate.addingTimeInterval(60),
+                calendars: [calendar]
+            )
+        } else {
+            predicate = eventStore.predicateForIncompleteReminders(
+                withDueDateStarting: nil,
+                ending: nil,
+                calendars: [calendar]
+            )
+        }
+
         let reminders = await withCheckedContinuation { continuation in
             eventStore.fetchReminders(matching: predicate) { reminders in
                 continuation.resume(returning: reminders ?? [])
             }
         }
         return reminders.first { reminder in
-            guard reminder.title == title else { return false }
-            // If both have due dates, compare them (within 1-minute window)
-            if let existingDue = reminder.dueDateComponents,
-               let due = dueDate {
-                let existingDate = safeDateFromComponents(existingDue)
-                if let existingDate = existingDate {
-                    return abs(existingDate.timeIntervalSince(due)) < 60
-                }
-            }
-            // If neither has a due date, it's a match by title alone
-            if reminder.dueDateComponents == nil && dueDate == nil {
-                return true
-            }
-            // One has due date, the other doesn't — not a duplicate
-            return false
+            Self.reminderDuplicateMatches(
+                existingTitle: reminder.title ?? "",
+                existingDueDate: reminder.dueDateComponents.flatMap(safeDateFromComponents),
+                existingCompletionDate: reminder.completionDate,
+                requestedTitle: title,
+                requestedDueDate: dueDate,
+                requestedCompletionDate: completionDate
+            )
         }
     }
 
@@ -1108,9 +1140,13 @@ actor EventKitManager: EventKitManaging {
         }
         let calendar = try findCalendar(name: name, source: calendarSource, entityType: .reminder)
 
-        // Idempotency: check for existing reminder with same title (+due date) on same list
-        if completionDate == nil,
-           let existing = await findDuplicateReminder(title: title, dueDate: dueDate, calendar: calendar) {
+        // Idempotency: check for existing reminder with same title, due date, and completion date on same list
+        if let existing = await findDuplicateReminder(
+            title: title,
+            dueDate: dueDate,
+            completionDate: completionDate,
+            calendar: calendar
+        ) {
             return CreateReminderResult(reminder: existing, isDuplicate: true)
         }
 
