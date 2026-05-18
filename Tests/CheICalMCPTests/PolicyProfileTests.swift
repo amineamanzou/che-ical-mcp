@@ -473,6 +473,54 @@ final class PolicyProfileTests: XCTestCase {
         }
     }
 
+    func testReminderDiagnosticsRemainReadProfileAndRespectResultCap() {
+        let policy = ToolPolicy(profile: .read, maxResultCount: 50)
+
+        XCTAssertNoThrow(try policy.authorize(
+            toolName: "list_reminders",
+            arguments: [
+                "include_diagnostics": .bool(true),
+                "limit": .int(50),
+            ]
+        ))
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_reminders",
+            arguments: ["include_diagnostics": .bool(true)]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "list_reminders")
+            XCTAssertEqual(profile, "read")
+        }
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "list_reminders",
+            arguments: [
+                "include_diagnostics": .bool(true),
+                "limit": .int(51),
+            ]
+        ))
+    }
+
+    func testAllowlistDeniesCompleteReminderWithCompletionDateBeforeDispatch() {
+        let policy = ToolPolicy(profile: .writeSafe, allowedCalendars: ["Work"])
+
+        XCTAssertThrowsError(try policy.authorize(
+            toolName: "complete_reminder",
+            arguments: [
+                "reminder_id": .string("reminder-id"),
+                "completion_date": .string("2026-05-10T12:00:00+02:00"),
+                "calendar_name": .string("Work"),
+            ]
+        )) { error in
+            guard case ToolError.policyDenied(let name, let profile) = error else {
+                return XCTFail("Expected policyDenied, got \(error)")
+            }
+            XCTAssertEqual(name, "complete_reminder")
+            XCTAssertEqual(profile, "write_safe")
+        }
+    }
+
     func testMaxResultCountCapsCleanupReminderIdsInBindingMode() {
         let policy = ToolPolicy(profile: .destructive, maxResultCount: 2)
 

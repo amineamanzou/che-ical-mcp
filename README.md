@@ -188,10 +188,10 @@ This queries GitHub Releases for the latest tag, downloads the new binary, and a
 
 | Tool | Description |
 |------|-------------|
-| `list_reminders` | List reminders with filter/sort/limit, tags extraction (v1.0.0) |
-| `create_reminder` | Create a reminder with due date, tags (v1.3.0) |
+| `list_reminders` | List reminders with filter/sort/limit, tags extraction, optional diagnostics (v1.0.0) |
+| `create_reminder` | Create a reminder with due date, tags, optional historical `completion_date` (v1.3.0) |
 | `update_reminder` | Update a reminder (including tags, `clear_due_date`) (v1.3.0) |
-| `complete_reminder` | Mark as completed/incomplete |
+| `complete_reminder` | Mark as completed/incomplete, optionally using historical `completion_date` when completing |
 | `delete_reminder` | Delete a reminder |
 | `search_reminders` | Search reminders by keyword(s) or tag (v1.3.0) |
 | `list_reminder_tags` | List all unique tags with usage counts (v1.3.0) |
@@ -291,7 +291,7 @@ make release && make install
 claude mcp add --scope user --transport stdio che-ical-mcp -- ~/bin/CheICalMCP
 ```
 
-> **⚠️ Swift 6 / Xcode 18 使用者：** 不要直接使用 `swift build` — 上游 MCP SDK 有 concurrency 錯誤（[swift-sdk#214](https://github.com/modelcontextprotocol/swift-sdk/issues/214)）。Makefile 會自動偵測並回退到 Swift 5 語言模式。
+> **⚠️ Swift 6 / Xcode 18 users:** Do not use `swift build` directly — upstream MCP SDK has a concurrency error ([swift-sdk#214](https://github.com/modelcontextprotocol/swift-sdk/issues/214)). The Makefile auto-detects this and falls back to Swift 5 language mode.
 
 ### Grant Permissions
 
@@ -393,10 +393,34 @@ Calendar names are now matched **case-insensitively**. If not found, the error m
 ### Enhanced list/delete Tools
 
 - **`list_events`**: `filter` (all/past/future/all_day), `sort` (asc/desc), `limit`
-- **`list_reminders`**: `filter` (all/incomplete/completed/overdue), `sort` (due_date/creation_date/priority/title), `limit`
+- **`list_reminders`**: `filter` (all/incomplete/completed/overdue), `sort` (due_date/creation_date/priority/title), `limit`, `include_diagnostics`
 - **`delete_events_batch`**: date range mode (`before_date`/`after_date`) + `dry_run` preview
 
 > **Breaking Change**: `list_events` and `list_reminders` now return `{events/reminders: [...], metadata: {...}}` instead of a plain array.
+
+### Reminder History Diagnostics
+
+`list_reminders` keeps its default response shape unless `include_diagnostics: true` is provided. When requested, each reminder includes a bounded `diagnostics` object with EventKit-derived due date components, completion date fields, and recurrence rule summaries when those fields are present. Read output remains wrapped as untrusted calendar data by the MCP response layer.
+
+`create_reminder` accepts an optional `completion_date` string. When present, the reminder is saved as completed and the response includes the saved `completion_date`.
+
+`complete_reminder` accepts an optional `completion_date` only when `completed` is omitted or `true`. Supplying `completion_date` with `completed: false` is rejected before any EventKit mutation.
+
+Policy expectations:
+
+- The default `read` profile still exposes `list_reminders`, including diagnostics reads.
+- `create_reminder` and `complete_reminder` remain `write_safe` tools, so configured confirmation tokens still apply.
+- `CHE_ICAL_MCP_MAX_RESULT_COUNT` still requires `list_reminders(include_diagnostics: true)` to include an explicit `limit` at or below the configured cap.
+- Calendar allowlists continue to fail closed for ID-selected mutations such as `complete_reminder`, including calls with `completion_date`.
+
+Manual EventKit completion-date persistence check:
+
+1. Create a disposable reminder list in Reminders.app, for example `CheICalMCP Disposable Test`.
+2. Run `create_reminder` with `calendar_name` set to that list and `completion_date: "2026-05-10T12:00:00+02:00"`.
+3. Run `list_reminders` with `calendar_name` set to that list, `filter: "completed"`, `include_diagnostics: true`, and a small `limit`.
+4. Verify the returned reminder is completed and the returned `completion_date` matches the same instant.
+5. Repeat with `complete_reminder(completed: true, completion_date: "2026-05-10T12:00:00+02:00")` on another reminder in the disposable list.
+6. Delete the disposable reminder list after the check.
 
 ---
 

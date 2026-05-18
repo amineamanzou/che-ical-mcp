@@ -38,6 +38,7 @@ class CheICalMCPServer {
     // uses the shared singleton (D1 in design.md: protocol covers only the
     // 3 methods the cleanup handler needs).
     private let reminderCleanupSource: any EventKitManaging
+    private let reminderOperationsSource: any ReminderOperationsSource
     private let dateFormatter: ISO8601DateFormatter
 
     /// Local time formatter for user-friendly display
@@ -71,10 +72,12 @@ class CheICalMCPServer {
     /// rather than widening `EventKitManaging`.
     init(
         reminderCleanupSource: any EventKitManaging = EventKitManager.shared,
+        reminderOperationsSource: any ReminderOperationsSource = EventKitManager.shared,
         policy: ToolPolicy = .default,
         auditLogger: PolicyAuditLogger = .default
     ) async throws {
         self.reminderCleanupSource = reminderCleanupSource
+        self.reminderOperationsSource = reminderOperationsSource
         self.policy = policy
         self.auditLogger = auditLogger
 
@@ -479,7 +482,11 @@ class CheICalMCPServer {
                             "description": .string("Maximum number of reminders to return")
                         ]),
                         "calendar_name": .object(["type": .string("string"), "description": .string("Optional reminder list name")]),
-                        "calendar_source": .object(["type": .string("string"), "description": .string("Calendar source (e.g., 'iCloud', 'Google'). Required when multiple lists share the same name.")])
+                        "calendar_source": .object(["type": .string("string"), "description": .string("Calendar source (e.g., 'iCloud', 'Google'). Required when multiple lists share the same name.")]),
+                        "include_diagnostics": .object([
+                            "type": .string("boolean"),
+                            "description": .string("Opt in to bounded diagnostic metadata for due date components, completion date, and recurrence rules.")
+                        ])
                     ])
                 ]),
                 annotations: .init(readOnlyHint: true, openWorldHint: false)
@@ -493,6 +500,7 @@ class CheICalMCPServer {
                         "title": .object(["type": .string("string"), "description": .string("Reminder title")]),
                         "notes": .object(["type": .string("string"), "description": .string("Optional notes")]),
                         "due_date": .object(["type": .string("string"), "description": .string("Optional due date in ISO8601 format with timezone (e.g., 2026-01-30T17:00:00+08:00)")]),
+                        "completion_date": .object(["type": .string("string"), "description": .string("Optional completion date. When provided, creates the reminder as completed with this historical completion timestamp.")]),
                         "priority": .object(["type": .string("integer"), "description": .string("Priority: 0=none, 1=high, 5=medium, 9=low")]),
                         "calendar_name": .object(["type": .string("string"), "description": .string("Target reminder list name (use list_calendars with type='reminder' to see available options)")]),
                         "calendar_source": .object(["type": .string("string"), "description": .string("Calendar source (e.g., 'iCloud', 'Google'). Required when multiple lists share the same name.")]),
@@ -614,7 +622,8 @@ class CheICalMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "reminder_id": .object(["type": .string("string"), "description": .string("The reminder identifier")]),
-                        "completed": .object(["type": .string("boolean"), "description": .string("true=completed, false=incomplete")])
+                        "completed": .object(["type": .string("boolean"), "description": .string("true=completed, false=incomplete")]),
+                        "completion_date": .object(["type": .string("string"), "description": .string("Optional completion date used when completed is true. Rejected when completed is false.")])
                     ]),
                     "required": .array([.string("reminder_id")])
                 ]),
@@ -1539,6 +1548,7 @@ class CheICalMCPServer {
         let filterMode = arguments["filter"]?.stringValue
         let sortMode = arguments["sort"]?.stringValue ?? "due_date"
         let limit = try InputValidation.requireOptionalLimit(arguments)
+        let includeDiagnostics = arguments["include_diagnostics"]?.boolValue ?? false
         // #29: enforce scope invariant consistent with cleanup_completed_reminders.
         // listReminders silently discards calendar_source when calendar_name is
         // nil — read-only so not destructive, but the API asymmetry is confusing
@@ -1560,7 +1570,7 @@ class CheICalMCPServer {
             completed = arguments["completed"]?.boolValue
         }
 
-        var reminders = try await eventKitManager.listReminders(
+        var reminders = try await reminderOperationsSource.listReminderItems(
             completed: completed,
             calendarName: calendarName,
             calendarSource: calendarSource
@@ -1573,7 +1583,7 @@ class CheICalMCPServer {
         if filterMode == "overdue" {
             reminders = reminders.filter { reminder in
                 !reminder.isCompleted &&
-                safeDateFromComponents(reminder.dueDateComponents).map { $0 < now } == true
+                reminder.dueDate.map { $0 < now } == true
             }
         }
 
@@ -1588,14 +1598,14 @@ class CheICalMCPServer {
                 let p2 = r2.priority == 0 ? Int.max : r2.priority
                 return p1 < p2
             case "title":
-                return (r1.title ?? "").localizedCaseInsensitiveCompare(r2.title ?? "") == .orderedAscending
+                return r1.title.localizedCaseInsensitiveCompare(r2.title) == .orderedAscending
             case "creation_date":
                 let d1 = r1.creationDate ?? Date.distantPast
                 let d2 = r2.creationDate ?? Date.distantPast
                 return d1 < d2
             default: // "due_date"
-                let d1 = safeDateFromComponents(r1.dueDateComponents)
-                let d2 = safeDateFromComponents(r2.dueDateComponents)
+                let d1 = r1.dueDate
+                let d2 = r2.dueDate
                 if d1 == nil && d2 == nil { return false }
                 if d1 == nil { return false }  // nulls last
                 if d2 == nil { return true }
@@ -1611,16 +1621,16 @@ class CheICalMCPServer {
         let result = reminders.map { [self] reminder -> [String: Any] in
             let (cleanNotes, tags) = extractTags(from: reminder.notes)
             var dict: [String: Any] = [
-                "id": reminder.calendarItemIdentifier,
-                "title": reminder.title ?? "",
+                "id": reminder.id,
+                "title": reminder.title,
                 "is_completed": reminder.isCompleted,
                 "priority": reminder.priority,
-                "calendar": reminder.calendar.title,
+                "calendar": reminder.calendarTitle,
                 "timezone": TimeZone.current.identifier
             ]
             if let notes = cleanNotes { dict["notes"] = notes }
             if !tags.isEmpty { dict["tags"] = tags }
-            if let dueDate = safeDateFromComponents(reminder.dueDateComponents) {
+            if let dueDate = reminder.dueDate {
                 dict["due_date"] = dateFormatter.string(from: dueDate)
                 dict["due_date_local"] = localDateFormatter.string(from: dueDate)
                 dict["is_overdue"] = !reminder.isCompleted && dueDate < now
@@ -1633,25 +1643,22 @@ class CheICalMCPServer {
                 dict["creation_date"] = dateFormatter.string(from: creationDate)
                 dict["creation_date_local"] = localDateFormatter.string(from: creationDate)
             }
-            // Location trigger info (from location-based alarms)
-            if let alarms = reminder.alarms {
-                for alarm in alarms {
-                    if let structured = alarm.structuredLocation {
-                        var triggerDict: [String: Any] = ["title": structured.title ?? ""]
-                        if let geo = structured.geoLocation {
-                            triggerDict["latitude"] = geo.coordinate.latitude
-                            triggerDict["longitude"] = geo.coordinate.longitude
-                        }
-                        if structured.radius > 0 { triggerDict["radius"] = structured.radius }
-                        switch alarm.proximity {
-                        case .enter: triggerDict["proximity"] = "enter"
-                        case .leave: triggerDict["proximity"] = "leave"
-                        default: break
-                        }
-                        dict["location_trigger"] = triggerDict
-                        break  // Only show first location trigger
-                    }
+            if let locationTrigger = reminder.locationTrigger {
+                dict["location_trigger"] = locationTrigger
+            }
+            if includeDiagnostics {
+                var diagnostics: [String: Any] = [:]
+                if let dueDateComponents = reminder.dueDateComponents?.json, !dueDateComponents.isEmpty {
+                    diagnostics["due_date_components"] = dueDateComponents
                 }
+                if let completionDate = reminder.completionDate {
+                    diagnostics["completion_date"] = dateFormatter.string(from: completionDate)
+                    diagnostics["completion_date_local"] = localDateFormatter.string(from: completionDate)
+                }
+                if let recurrenceRules = reminder.recurrenceRules, !recurrenceRules.isEmpty {
+                    diagnostics["recurrence_rules"] = recurrenceRules
+                }
+                dict["diagnostics"] = diagnostics
             }
             return dict
         }
@@ -1685,6 +1692,7 @@ class CheICalMCPServer {
         let notes = buildNotesWithTags(notes: userNotes, tags: tags)
 
         let dueDate: Date? = try arguments["due_date"]?.stringValue.map { try parseFlexibleDate($0) }
+        let completionDate = try parseOptionalDateArgument(arguments, key: "completion_date")
         let priority = try InputValidation.requireIntIfPresent(arguments, key: "priority", default: 0)
         let calendarName = arguments["calendar_name"]?.stringValue
         let calendarSource = arguments["calendar_source"]?.stringValue
@@ -1692,7 +1700,7 @@ class CheICalMCPServer {
         let recurrenceRule = try parseRecurrenceRule(from: arguments)
         let locationTrigger = try parseLocationTrigger(from: arguments)
 
-        let result = try await eventKitManager.createReminder(
+        let result = try await reminderOperationsSource.createReminderItem(
             title: title,
             notes: notes,
             dueDate: dueDate,
@@ -1700,15 +1708,20 @@ class CheICalMCPServer {
             calendarName: calendarName,
             calendarSource: calendarSource,
             recurrenceRule: recurrenceRule,
-            locationTrigger: locationTrigger
+            locationTrigger: locationTrigger,
+            completionDate: completionDate
         )
 
         if result.isDuplicate {
-            return try actionResult(["action": "skipped", "reason": "duplicate", "title": result.reminder.title ?? title, "id": result.reminder.calendarItemIdentifier])
+            return try actionResult(["action": "skipped", "reason": "duplicate", "title": result.title, "id": result.id])
         }
-        var fields: [String: Any] = ["action": "created", "title": result.reminder.title ?? title, "id": result.reminder.calendarItemIdentifier]
+        var fields: [String: Any] = ["action": "created", "title": result.title, "id": result.id]
         if !tags.isEmpty {
             fields["tags"] = tags
+        }
+        if let completionDate = result.completionDate {
+            fields["is_completed"] = result.isCompleted
+            fields["completion_date"] = dateFormatter.string(from: completionDate)
         }
         return try actionResult(fields)
     }
@@ -1789,13 +1802,27 @@ class CheICalMCPServer {
         }
 
         let completed = arguments["completed"]?.boolValue ?? true
+        let completionDate = try parseOptionalDateArgument(arguments, key: "completion_date")
+        if !completed && completionDate != nil {
+            throw ToolError.invalidParameter("completion_date can only be provided when completed is true")
+        }
 
-        let reminder = try await eventKitManager.completeReminder(
+        let reminder = try await reminderOperationsSource.completeReminderItem(
             identifier: reminderId,
-            completed: completed
+            completed: completed,
+            completionDate: completionDate
         )
 
-        return try actionResult(["action": "completed", "title": reminder.title ?? "", "id": reminderId, "is_completed": reminder.isCompleted])
+        var fields: [String: Any] = [
+            "action": "completed",
+            "title": reminder.title,
+            "id": reminderId,
+            "is_completed": reminder.isCompleted
+        ]
+        if let completionDate = reminder.completionDate {
+            fields["completion_date"] = dateFormatter.string(from: completionDate)
+        }
+        return try actionResult(fields)
     }
 
     private func handleDeleteReminder(arguments: [String: Value]) async throws -> String {
@@ -3010,6 +3037,14 @@ class CheICalMCPServer {
         }
 
         throw ToolError.invalidParameter("'\(string)' is not a valid date. Supported formats: ISO8601 (2026-02-06T14:00:00+08:00), datetime (2026-02-06T14:00:00), date (2026-02-06), time (14:00)")
+    }
+
+    private func parseOptionalDateArgument(_ arguments: [String: Value], key: String) throws -> Date? {
+        guard let raw = arguments[key] else { return nil }
+        guard let string = raw.stringValue else {
+            throw ToolError.invalidParameter("\(key) must be a string")
+        }
+        return try parseFlexibleDate(string)
     }
 
     /// Get date range for quick time shortcuts

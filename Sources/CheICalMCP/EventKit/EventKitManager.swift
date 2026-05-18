@@ -1052,39 +1052,71 @@ actor EventKitManager: EventKitManaging {
         let isDuplicate: Bool
     }
 
-    /// Find an existing incomplete reminder that matches by title on the same list.
-    /// Optionally also matches due date if provided.
+    static func reminderDuplicateMatches(
+        existingTitle: String,
+        existingDueDate: Date?,
+        existingCompletionDate: Date?,
+        requestedTitle: String,
+        requestedDueDate: Date?,
+        requestedCompletionDate: Date?
+    ) -> Bool {
+        guard existingTitle == requestedTitle else { return false }
+
+        switch (existingDueDate, requestedDueDate) {
+        case (nil, nil):
+            break
+        case (let existing?, let requested?):
+            guard abs(existing.timeIntervalSince(requested)) < 60 else { return false }
+        default:
+            return false
+        }
+
+        switch (existingCompletionDate, requestedCompletionDate) {
+        case (nil, nil):
+            return true
+        case (let existing?, let requested?):
+            return abs(existing.timeIntervalSince(requested)) < 60
+        default:
+            return false
+        }
+    }
+
+    /// Find an existing reminder that matches by title, due date, and completion date on the same list.
     private func findDuplicateReminder(
         title: String,
         dueDate: Date?,
+        completionDate: Date?,
         calendar: EKCalendar
     ) async -> EKReminder? {
-        let predicate = eventStore.predicateForIncompleteReminders(
-            withDueDateStarting: nil,
-            ending: nil,
-            calendars: [calendar]
-        )
+        let predicate: NSPredicate
+        if let completionDate {
+            predicate = eventStore.predicateForCompletedReminders(
+                withCompletionDateStarting: completionDate.addingTimeInterval(-60),
+                ending: completionDate.addingTimeInterval(60),
+                calendars: [calendar]
+            )
+        } else {
+            predicate = eventStore.predicateForIncompleteReminders(
+                withDueDateStarting: nil,
+                ending: nil,
+                calendars: [calendar]
+            )
+        }
+
         let reminders = await withCheckedContinuation { continuation in
             eventStore.fetchReminders(matching: predicate) { reminders in
                 continuation.resume(returning: reminders ?? [])
             }
         }
         return reminders.first { reminder in
-            guard reminder.title == title else { return false }
-            // If both have due dates, compare them (within 1-minute window)
-            if let existingDue = reminder.dueDateComponents,
-               let due = dueDate {
-                let existingDate = safeDateFromComponents(existingDue)
-                if let existingDate = existingDate {
-                    return abs(existingDate.timeIntervalSince(due)) < 60
-                }
-            }
-            // If neither has a due date, it's a match by title alone
-            if reminder.dueDateComponents == nil && dueDate == nil {
-                return true
-            }
-            // One has due date, the other doesn't — not a duplicate
-            return false
+            Self.reminderDuplicateMatches(
+                existingTitle: reminder.title ?? "",
+                existingDueDate: reminder.dueDateComponents.flatMap(safeDateFromComponents),
+                existingCompletionDate: reminder.completionDate,
+                requestedTitle: title,
+                requestedDueDate: dueDate,
+                requestedCompletionDate: completionDate
+            )
         }
     }
 
@@ -1097,7 +1129,8 @@ actor EventKitManager: EventKitManaging {
         calendarSource: String? = nil,
         alarmOffsets: [Int]? = nil,
         recurrenceRule: RecurrenceRuleInput? = nil,
-        locationTrigger: LocationTriggerInput? = nil
+        locationTrigger: LocationTriggerInput? = nil,
+        completionDate: Date? = nil
     ) async throws -> CreateReminderResult {
         try await ensureReminderAccess()
 
@@ -1107,8 +1140,13 @@ actor EventKitManager: EventKitManaging {
         }
         let calendar = try findCalendar(name: name, source: calendarSource, entityType: .reminder)
 
-        // Idempotency: check for existing reminder with same title (+due date) on same list
-        if let existing = await findDuplicateReminder(title: title, dueDate: dueDate, calendar: calendar) {
+        // Idempotency: check for existing reminder with same title, due date, and completion date on same list
+        if let existing = await findDuplicateReminder(
+            title: title,
+            dueDate: dueDate,
+            completionDate: completionDate,
+            calendar: calendar
+        ) {
             return CreateReminderResult(reminder: existing, isDuplicate: true)
         }
 
@@ -1123,6 +1161,11 @@ actor EventKitManager: EventKitManaging {
                 [.year, .month, .day, .hour, .minute],
                 from: due
             )
+        }
+
+        if let completionDate {
+            reminder.isCompleted = true
+            reminder.completionDate = completionDate
         }
 
         // Add alarms
@@ -1247,7 +1290,7 @@ actor EventKitManager: EventKitManaging {
         return reminder
     }
 
-    func completeReminder(identifier: String, completed: Bool = true) async throws -> EKReminder {
+    func completeReminder(identifier: String, completed: Bool = true, completionDate: Date? = nil) async throws -> EKReminder {
         try await ensureReminderAccess()
 
         guard let reminder = eventStore.calendarItem(withIdentifier: identifier) as? EKReminder else {
@@ -1255,17 +1298,26 @@ actor EventKitManager: EventKitManaging {
         }
 
         let wasCompleted = reminder.isCompleted
+        let previousCompletionDate = reminder.completionDate
 
         reminder.isCompleted = completed
         if completed {
-            reminder.completionDate = Date()
+            reminder.completionDate = completionDate ?? Date()
         } else {
             reminder.completionDate = nil
         }
+        let newCompletionDate = reminder.completionDate
 
         try eventStore.save(reminder, commit: true)
         markNeedsRefresh()
-        await CalendarUndoManager.shared.record(.completeReminder(id: identifier, wasCompleted: wasCompleted, title: reminder.title ?? ""))
+        await CalendarUndoManager.shared.record(.completeReminder(
+            id: identifier,
+            wasCompleted: wasCompleted,
+            previousCompletionDate: previousCompletionDate,
+            newCompleted: completed,
+            newCompletionDate: newCompletionDate,
+            title: reminder.title ?? ""
+        ))
         return reminder
     }
 
@@ -1558,7 +1610,7 @@ actor EventKitManager: EventKitManaging {
             markNeedsRefresh()
             return "Undone: restored reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(oldSnapshot.title))' to previous state"
 
-        case .completeReminder(let id, let wasCompleted, let title):
+        case .completeReminder(let id, let wasCompleted, let previousCompletionDate, _, _, let title):
             try await ensureReminderAccess()
             let predicate = eventStore.predicateForReminders(in: nil)
             let reminders = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[EKReminder], Error>) in
@@ -1570,6 +1622,7 @@ actor EventKitManager: EventKitManaging {
                 throw EventKitError.reminderNotFound(identifier: id)
             }
             reminder.isCompleted = wasCompleted
+            reminder.completionDate = wasCompleted ? previousCompletionDate : nil
             try eventStore.save(reminder, commit: true)
             markNeedsRefresh()
             return "Undone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(wasCompleted)"
@@ -1607,8 +1660,7 @@ actor EventKitManager: EventKitManaging {
         case .updateReminder(let id, _):
             return "Redo update: the reminder \(id) was restored. Apply your changes again."
 
-        case .completeReminder(let id, let wasCompleted, let title):
-            // Redo = set back to the new state (opposite of wasCompleted)
+        case .completeReminder(let id, _, _, let newCompleted, let newCompletionDate, let title):
             try await ensureReminderAccess()
             let predicate = eventStore.predicateForReminders(in: nil)
             let reminders = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[EKReminder], Error>) in
@@ -1619,10 +1671,11 @@ actor EventKitManager: EventKitManaging {
             guard let reminder = reminders.first(where: { $0.calendarItemIdentifier == id }) else {
                 throw EventKitError.reminderNotFound(identifier: id)
             }
-            reminder.isCompleted = !wasCompleted
+            reminder.isCompleted = newCompleted
+            reminder.completionDate = newCompleted ? newCompletionDate : nil
             try eventStore.save(reminder, commit: true)
             markNeedsRefresh()
-            return "Redone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(!wasCompleted)"
+            return "Redone: set reminder '\(EventKitErrorSanitizer.sanitizeForInterpolation(title))' completion to \(newCompleted)"
 
         case .batch(let ops):
             var results: [String] = []
